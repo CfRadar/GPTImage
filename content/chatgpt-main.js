@@ -27,74 +27,75 @@
 
       composer.focus();
 
-      // 2. Direct Lexical state update if __lexicalEditor is accessible
-      const editor = composer.__lexicalEditor;
-      let stateUpdated = false;
+      const requiredSnippet = promptText.trim().slice(0, 20);
 
-      if (editor && typeof editor.parseEditorState === 'function') {
+      // Method 1: Native execCommand insertText (updates Lexical AND React state naturally)
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(composer);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('insertText', false, promptText);
+      } catch (e) {}
+
+      // Method 2: Synthetic Clipboard paste event (Lexical's native multiline handler)
+      let currentText = (composer.innerText || composer.textContent || '').trim();
+      if (!currentText.includes(requiredSnippet.slice(0, 15))) {
         try {
-          // Split multiline prompts into valid Lexical paragraphs to prevent schema validation rejection
-          const lines = promptText.split(/\r?\n/);
-          const paragraphs = lines.map((line) => {
-            const children = line.length > 0 ? [{
-              detail: 0,
-              format: 0,
-              mode: 'normal',
-              text: line,
-              type: 'text',
-              version: 1
-            }] : [];
-            return {
-              children,
-              direction: 'ltr',
-              format: '',
-              indent: 0,
-              type: 'paragraph',
-              version: 1
-            };
-          });
-
-          const stateData = {
-            root: {
-              children: paragraphs,
-              direction: 'ltr',
-              format: '',
-              indent: 0,
-              type: 'root',
-              version: 1
-            }
-          };
-
-          const newState = editor.parseEditorState(JSON.stringify(stateData));
-          editor.setEditorState(newState);
-          stateUpdated = true;
-          console.log('[PromptFlow Main] Lexical state directly populated via parseEditorState (multiline safe)');
-        } catch (parseErr) {
-          console.warn('[PromptFlow Main] parseEditorState note:', parseErr);
-        }
+          const dt = new DataTransfer();
+          dt.setData('text/plain', promptText);
+          composer.dispatchEvent(new ClipboardEvent('paste', {
+            clipboardData: dt,
+            bubbles: true,
+            cancelable: true
+          }));
+        } catch (e) {}
       }
 
-      if (!stateUpdated) {
-        // Fallback: Lexical compliant DOM structure with multiline paragraph nodes
-        composer.innerHTML = '';
-        const lines = promptText.split(/\r?\n/);
-        lines.forEach((line) => {
-          const p = document.createElement('p');
-          p.setAttribute('dir', 'auto');
-          if (line.length > 0) {
-            const span = document.createElement('span');
-            span.setAttribute('data-lexical-text', 'true');
-            span.textContent = line;
-            p.appendChild(span);
-          } else {
-            p.appendChild(document.createElement('br'));
-          }
-          composer.appendChild(p);
-        });
+      // Method 3: Direct Lexical editor state synchronization if needed
+      const editor = composer.__lexicalEditor;
+      if (editor && typeof editor.setEditorState === 'function') {
+        try {
+          currentText = (composer.innerText || composer.textContent || '').trim();
+          if (!currentText.includes(requiredSnippet.slice(0, 15)) && typeof editor.parseEditorState === 'function') {
+            const lines = promptText.split(/\r?\n/);
+            const paragraphs = lines.map((line) => {
+              const children = line.length > 0 ? [{
+                detail: 0,
+                format: 0,
+                mode: 'normal',
+                text: line,
+                type: 'text',
+                version: 1
+              }] : [];
+              return {
+                children,
+                direction: 'ltr',
+                format: '',
+                indent: 0,
+                type: 'paragraph',
+                version: 1
+              };
+            });
 
-        // Also update value if textarea
-        if ('value' in composer) {
-          composer.value = promptText;
+            const stateData = {
+              root: {
+                children: paragraphs,
+                direction: 'ltr',
+                format: '',
+                indent: 0,
+                type: 'root',
+                version: 1
+              }
+            };
+
+            const newState = editor.parseEditorState(JSON.stringify(stateData));
+            editor.setEditorState(newState);
+            console.log('[PromptFlow Main] Lexical state directly populated via parseEditorState');
+          }
+        } catch (parseErr) {
+          console.warn('[PromptFlow Main] parseEditorState note:', parseErr);
         }
       }
 
@@ -103,6 +104,9 @@
       composer.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: promptText }));
       composer.dispatchEvent(new Event('input', { bubbles: true }));
       composer.dispatchEvent(new Event('change', { bubbles: true }));
+
+      // Give React 500ms to reconcile its internal state with the new text
+      await new Promise((r) => setTimeout(r, 500));
 
       // 3. Poll for Send button readiness AND verify prompt text is committed in composer
       const findSendBtn = () =>
@@ -114,7 +118,6 @@
       const getComposerText = () =>
         (composer.innerText || composer.textContent || composer.value || '').trim();
 
-      const requiredSnippet = promptText.trim().slice(0, 20);
       let sendBtn = null;
       const pollStart = Date.now();
       const maxWait = 4000;
@@ -123,8 +126,8 @@
         sendBtn = findSendBtn();
         const isAriaDisabled = sendBtn?.getAttribute('aria-disabled') === 'true';
         const isDisabled = sendBtn?.disabled;
-        const currentText = getComposerText();
-        const textConfirmed = currentText.length > 0 && currentText.includes(requiredSnippet.slice(0, 15));
+        const textInComposer = getComposerText();
+        const textConfirmed = textInComposer.length > 0 && textInComposer.includes(requiredSnippet.slice(0, 15));
 
         // CRITICAL GUARD: Both send button ready AND text verified present in composer!
         // Prevents prematurely sending reference image alone when sendBtn is enabled by attachment!

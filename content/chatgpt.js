@@ -469,21 +469,14 @@
 
       if (isContentEditable) {
         // Clear existing content cleanly
+        // Native insertText
+        let success = false;
         try {
           const sel = window.getSelection();
           const range = document.createRange();
           range.selectNodeContents(composer);
           sel.removeAllRanges();
           sel.addRange(range);
-          document.execCommand('delete', false, null);
-        } catch (e) {}
-        composer.innerHTML = '';
-        composer.textContent = '';
-        await sleep(40);
-
-        // Native insertText
-        let success = false;
-        try {
           success = document.execCommand('insertText', false, text);
         } catch (e) {}
 
@@ -570,7 +563,7 @@
           setTimeout(() => {
             window.removeEventListener('__PROMPTFLOW_MAIN_DONE__', handler);
             resolve({ success: false, timeout: true });
-          }, 4500);
+          }, 8000);
         });
 
         window.dispatchEvent(
@@ -586,7 +579,13 @@
           return true;
         }
 
-        console.log('[PromptFlow] Main World Bridge note:', res?.error || 'timeout, using isolated fallback');
+        console.log('[PromptFlow] Main World Bridge note:', res?.error || 'timeout, checking fallback');
+
+        // Check if ChatGPT has already started generating from the bridge click
+        if (this.isGenerating()) {
+          console.log('[PromptFlow] ChatGPT is already generating, skipping redundant fallback submission.');
+          return true;
+        }
 
         // 2. Fallback: Isolated world input and single sendBtn.click()
         await this.insertPrompt(text);
