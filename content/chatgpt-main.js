@@ -104,29 +104,51 @@
       composer.dispatchEvent(new Event('input', { bubbles: true }));
       composer.dispatchEvent(new Event('change', { bubbles: true }));
 
-      // 3. Poll for Send button readiness (allow React to reconcile state naturally)
+      // 3. Poll for Send button readiness AND verify prompt text is committed in composer
       const findSendBtn = () =>
         document.querySelector('button[data-testid="send-button"]') ||
         document.querySelector('button[aria-label*="Send" i]') ||
         document.querySelector('button[data-testid="fruitjuice-send-button"]') ||
         composer.closest('form')?.querySelector('button[type="submit"]');
 
+      const getComposerText = () =>
+        (composer.innerText || composer.textContent || composer.value || '').trim();
+
+      const requiredSnippet = promptText.trim().slice(0, 20);
       let sendBtn = null;
       const pollStart = Date.now();
-      const maxWait = 2500;
+      const maxWait = 4000;
 
       while (Date.now() - pollStart < maxWait) {
         sendBtn = findSendBtn();
         const isAriaDisabled = sendBtn?.getAttribute('aria-disabled') === 'true';
         const isDisabled = sendBtn?.disabled;
+        const currentText = getComposerText();
+        const textConfirmed = currentText.length > 0 && currentText.includes(requiredSnippet.slice(0, 15));
 
-        if (sendBtn && !isDisabled && !isAriaDisabled) {
+        // CRITICAL GUARD: Both send button ready AND text verified present in composer!
+        // Prevents prematurely sending reference image alone when sendBtn is enabled by attachment!
+        if (sendBtn && !isDisabled && !isAriaDisabled && textConfirmed) {
           break;
         }
 
-        // Keep React state notified
+        // Re-notify React & Lexical if text not yet reflected
+        if (!textConfirmed) {
+          composer.focus();
+          try {
+            document.execCommand('insertText', false, promptText);
+          } catch (e) {}
+        }
+
         composer.dispatchEvent(new Event('input', { bubbles: true }));
         await new Promise((r) => setTimeout(r, 200));
+      }
+
+      const finalContent = getComposerText();
+      const hasVerifiedText = finalContent.length > 0 && finalContent.includes(requiredSnippet.slice(0, 15));
+
+      if (!hasVerifiedText) {
+        throw new Error('Prompt text verification failed in composer; aborted to avoid sending attachment alone.');
       }
 
       if (sendBtn) {
@@ -134,9 +156,9 @@
         sendBtn.setAttribute('aria-disabled', 'false');
         sendBtn.disabled = false;
         sendBtn.click();
-        console.log('[PromptFlow Main] Send button clicked cleanly (single dispatch)');
+        console.log('[PromptFlow Main] Send button clicked cleanly with prompt text verified');
       } else {
-        // Fallback: Enter key
+        // Fallback: Enter key ONLY if prompt text is verified present
         const enterEvt = new KeyboardEvent('keydown', {
           key: 'Enter',
           code: 'Enter',

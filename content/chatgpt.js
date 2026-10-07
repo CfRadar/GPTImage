@@ -333,7 +333,7 @@
     /**
      * Waits until the uploaded image attachment thumbnail is visible in composer.
      */
-    async waitForAttachment(timeoutMs = 20000) {
+    async waitForAttachment(timeoutMs = 25000) {
       const start = Date.now();
 
       while (Date.now() - start < timeoutMs) {
@@ -369,14 +369,8 @@
         const spinner = container.querySelector('[role="progressbar"], .loading-spinner, [aria-label*="loading" i], [aria-label*="uploading" i]');
 
         if (previewFound && !spinner) {
-          await sleep(600);
-          return true;
-        }
-
-        // If file input has files buffered, consider upload initiated
-        const directFileInput = document.querySelector('input[type="file"]');
-        if (directFileInput && directFileInput.files && directFileInput.files.length > 0 && (Date.now() - start > 6000)) {
-          console.log('[PromptFlow] File input has buffered file, proceeding with upload...');
+          // Stabilization buffer: ensure ChatGPT's React state finishes binding the attachment
+          await sleep(1500);
           return true;
         }
 
@@ -576,7 +570,7 @@
           setTimeout(() => {
             window.removeEventListener('__PROMPTFLOW_MAIN_DONE__', handler);
             resolve({ success: false, timeout: true });
-          }, 2500);
+          }, 4500);
         });
 
         window.dispatchEvent(
@@ -618,6 +612,12 @@
       try {
         this.dismissStuckOverlays();
 
+        const composer = this.findComposer();
+        const currentText = (composer?.innerText || composer?.textContent || composer?.value || '').trim();
+        if (!currentText) {
+          throw new Error('Refusing to submit prompt: composer text is empty (prevents sending attachment alone)');
+        }
+
         // 1. Wait briefly for Send button to become enabled (up to 3s with active input refresh)
         let sendBtn = null;
         for (let i = 0; i < 6; i++) {
@@ -627,7 +627,6 @@
           }
 
           // Periodic input event refresh to wake up ChatGPT Lexical state
-          const composer = this.findComposer();
           if (composer) {
             composer.focus();
             composer.dispatchEvent(new Event('input', { bubbles: true }));
@@ -649,7 +648,6 @@
         }
 
         // 2. Fallback: Dispatch Enter keydown/keyup on composer ONLY if send button was not found
-        const composer = this.findComposer();
         if (composer) {
           console.log('[PromptFlow] Fallback: Dispatching Enter keydown on composer');
           composer.focus();

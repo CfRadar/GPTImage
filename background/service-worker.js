@@ -316,7 +316,7 @@ class AutomationEngine {
                 session.referenceUploaded = true;
                 await storage.saveSession(session);
                 logger.success(`Reference image uploaded for Design ${qIdx + 1}`);
-                await new Promise((r) => setTimeout(r, 1500));
+                await new Promise((r) => setTimeout(r, 2500));
               }
 
               if (this.executionId !== currentRunId || this.stopRequested) break;

@@ -588,3 +588,15 @@ All 17 reported bugs and operational edge cases have been resolved and verified 
   - **OpenAI File CDN Priority:** Direct detection of hosted OpenAI CDN URLs (`files.oaiusercontent.com`, `backend-api/files`, `oaistorage`). When a new CDN URL appears, it is accepted immediately without blocking on `naturalWidth`.
   - **Accurate Avatar Discrimination:** Generated image signals (`alt.includes('generated')`, `dall-e`, `oaiusercontent.com`) are explicitly excluded from avatar filters. Avatar checks now target exact matches (`alt === 'chatgpt'`, profile buttons, gravatars).
   - **Viewport Scroll Trigger:** Automatically scrolls the document to trigger Chromium's IntersectionObservers and load any lazy-loaded `<img>` elements immediately.
+
+### 8. Attachment-Alone Premature Submission & Turn Desynchronization
+- **Root Cause:**
+  1. *Premature Send Triggering:* In ChatGPT, uploading an image enables the Send button even when the composer text is completely empty. `chatgpt-main.js` checked `if (sendBtn && !isDisabled && !isAriaDisabled) break;`. Because `sendBtn` was already enabled by the newly uploaded attachment, the loop exited immediately in 0ms before React/Lexical committed the prompt text into the DOM, clicking Send on the attachment alone.
+  2. *Turn Desynchronization:* ChatGPT answered the attachment-only message with a text response. Then Prompt 1 was injected into a subsequent turn. The extension mistook the first assistant response as the completion of Prompt 1, causing the UI to advance to "creating second image" while Prompt 1 was actually running.
+  3. *Main World / Fallback Race:* A short 2500ms bridge timeout caused the isolated world to initiate a fallback submit shortly after the main world fired.
+- **Implemented Fixes:**
+  - **Mandatory Text Verification in [`content/chatgpt-main.js`](file:///d:/ALL_USER_DATA/GPTImage/content/chatgpt-main.js):** The submission loop now strictly verifies `currentText.includes(requiredSnippet)` in the composer before breaking out or clicking Send. It is physically impossible to submit an attachment without the prompt text.
+  - **Fallback Safeguard in [`content/chatgpt.js`](file:///d:/ALL_USER_DATA/GPTImage/content/chatgpt.js):** `submitPrompt()` throws an explicit error if `composer.innerText` is empty, refusing to dispatch Send or Enter when there is no text.
+  - **Bridge Timeout Expansion:** Increased `bridgePromise` timeout to 4500ms, giving slower network connections and React reconciliation ample time to settle without race conditions.
+  - **Attachment Stabilization Delays:** In `waitForAttachment()`, added a 1500ms stabilization delay after upload completion, and in [`background/service-worker.js`](file:///d:/ALL_USER_DATA/GPTImage/background/service-worker.js), added a 2500ms buffer after reference image upload before initiating Prompt 1.
+
