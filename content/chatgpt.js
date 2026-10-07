@@ -799,92 +799,202 @@
     }
 
     /**
+     * Checks if an image is a UI element, icon, or avatar rather than a generated image.
+     */
+    isAvatarOrUIElement(img) {
+      if (!img) return true;
+      const src = img.currentSrc || img.src || '';
+      const alt = (img.getAttribute('alt') || '').toLowerCase().trim();
+      const className = (img.className || '').toLowerCase();
+      const parentClass = (img.parentElement?.className || '').toLowerCase();
+
+      // Definitive generated image signals
+      if (
+        src.includes('oaiusercontent.com') ||
+        src.includes('backend-api/files') ||
+        src.includes('oaistorage') ||
+        alt.includes('generated') ||
+        alt.includes('dall-e') ||
+        alt.includes('dall·e') ||
+        alt.includes('dalle')
+      ) {
+        return false;
+      }
+
+      // Definitive avatar / UI signals
+      if (
+        img.closest('button[data-testid="profile-button"]') ||
+        img.closest('[data-testid="user-menu-button"]') ||
+        src.includes('avatar') ||
+        src.includes('gravatar') ||
+        src.includes('googleusercontent.com/a/') ||
+        className.includes('avatar') ||
+        parentClass.includes('avatar') ||
+        alt === 'user' ||
+        alt === 'avatar' ||
+        alt === 'chatgpt' ||
+        alt === 'profile' ||
+        alt === 'user avatar' ||
+        alt === 'chatgpt avatar'
+      ) {
+        return true;
+      }
+
+      // Small icons
+      if (img.naturalWidth > 0 && img.naturalWidth <= 64) return true;
+      if (img.naturalHeight > 0 && img.naturalHeight <= 64) return true;
+      if (img.clientWidth > 0 && img.clientWidth <= 64 && img.clientHeight > 0 && img.clientHeight <= 64) return true;
+
+      return false;
+    }
+
+    /**
+     * Checks if an image belongs to the user input composer or user message bubble.
+     */
+    isUserImageOrComposer(img) {
+      if (!img) return true;
+      return !!(
+        img.closest('[data-message-author-role="user"]') ||
+        img.closest('article[data-testid*="user" i]') ||
+        img.closest('form') ||
+        img.closest('#prompt-textarea') ||
+        img.closest('[data-testid="composer"]')
+      );
+    }
+
+    /**
+     * Finds candidate generated images in the DOM across target assistant turns and OpenAI CDN assets.
+     */
+    findGeneratedImageCandidates() {
+      const candidates = [];
+      const seenUrls = new Set();
+
+      // Wake up lazy-loaded images by scrolling to conversation end
+      try {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' });
+      } catch (e) {}
+
+      const assistantMsgs = this.getAssistantMessages();
+      const targetAssistantIndex = this.baselineAssistantCount || 0;
+      const targetScopes = assistantMsgs.length > targetAssistantIndex
+        ? assistantMsgs.slice(targetAssistantIndex)
+        : [];
+
+      // Strategy 1: Search target assistant turn and its enclosing article/turn container
+      for (const scope of targetScopes) {
+        if (!scope) continue;
+        if (scope.getAttribute('data-message-author-role') === 'user' || scope.querySelector?.('[data-message-author-role="user"]')) {
+          continue;
+        }
+
+        // Expand scope to parent article or turn container to capture sibling image widgets
+        const container = scope.closest('article[data-testid^="conversation-turn-"]') || scope.closest('article') || scope.parentElement || scope;
+        if (container.querySelector?.('[data-message-author-role="user"]')) {
+          continue;
+        }
+
+        const imgs = Array.from(container.querySelectorAll('img'));
+        for (const img of imgs) {
+          const src = img.currentSrc || img.src;
+          if (!src || seenUrls.has(src)) continue;
+          if (this.isUserImageOrComposer(img)) continue;
+          if (this.isAvatarOrUIElement(img)) continue;
+          if (!this.existingImagesSnapshot.has(src)) {
+            seenUrls.add(src);
+            candidates.push({ img, src, priority: 3 });
+          }
+        }
+      }
+
+      // Strategy 2: High-confidence search across entire DOM for new OpenAI CDN / DALL-E images
+      const allImgs = Array.from(document.querySelectorAll('img'));
+      for (const img of allImgs) {
+        const src = img.currentSrc || img.src;
+        if (!src || seenUrls.has(src)) continue;
+        if (this.isUserImageOrComposer(img)) continue;
+        if (this.isAvatarOrUIElement(img)) continue;
+
+        const isOaiCdn = src.includes('oaiusercontent.com') || src.includes('backend-api/files') || src.includes('oaistorage');
+        const isBlob = src.startsWith('blob:') && !img.closest('[data-testid*="attachment"]');
+        const isNew = !this.existingImagesSnapshot.has(src);
+
+        if (isNew && (isOaiCdn || isBlob)) {
+          seenUrls.add(src);
+          candidates.push({ img, src, priority: isOaiCdn ? 2 : 1 });
+        }
+      }
+
+      // Strategy 3: General fallback across DOM for any newly added non-avatar image
+      for (const img of allImgs) {
+        const src = img.currentSrc || img.src;
+        if (!src || seenUrls.has(src)) continue;
+        if (this.isUserImageOrComposer(img)) continue;
+        if (this.isAvatarOrUIElement(img)) continue;
+
+        if (!this.existingImagesSnapshot.has(src)) {
+          seenUrls.add(src);
+          candidates.push({ img, src, priority: 0 });
+        }
+      }
+
+      // Sort by priority descending
+      candidates.sort((a, b) => b.priority - a.priority);
+      return candidates;
+    }
+
+    /**
+     * Determines whether a candidate image is decoded or ready.
+     */
+    isImageReady(cand) {
+      const img = cand.img;
+      const src = cand.src;
+
+      if (!src || (!src.startsWith('http') && !src.startsWith('blob:') && !src.startsWith('data:'))) {
+        return false;
+      }
+
+      // 1. Direct OpenAI CDN URL - guaranteed ready
+      if (src.includes('oaiusercontent.com') || src.includes('backend-api/files') || src.includes('oaistorage')) {
+        return true;
+      }
+
+      // 2. Fully loaded DOM image with valid dimensions
+      if (img.complete && (img.naturalWidth > 60 || img.clientWidth > 60)) {
+        return true;
+      }
+
+      // 3. Blob URL with valid client size or completed status
+      if (src.startsWith('blob:') && (img.complete || img.clientWidth > 60 || img.naturalWidth > 60)) {
+        return true;
+      }
+
+      // 4. Data URL
+      if (src.startsWith('data:image/')) {
+        return true;
+      }
+
+      return false;
+    }
+
+    /**
      * Detects the newly generated image EXCLUSIVELY in the new assistant turn(s).
-     * Solves the issue where identical prompts would confuse older generations with current ones.
      */
     async detectNewGeneratedImage(timeoutMs = 45000) {
       const startTime = Date.now();
       console.log(`[PromptFlow] Scanning for newly generated image in turns after index ${this.baselineTurnCount}...`);
 
       while (Date.now() - startTime < timeoutMs) {
-        const turns = this.getAssistantTurns();
-        // Target only the new assistant turns created after the prompt was submitted!
-        const targetTurns = turns.length > (this.baselineTurnCount || 0)
-          ? turns.slice(this.baselineTurnCount || 0)
-          : [turns[turns.length - 1] || document.body];
-
-        const candidateImages = [];
-
-        for (const scope of targetTurns) {
-          if (!scope) continue;
-          const images = Array.from(scope.querySelectorAll('img'));
-
-          for (const img of images) {
-            const src = img.currentSrc || img.src;
-            if (!src) continue;
-
-            // Filter out avatar images
-            const alt = (img.getAttribute('alt') || '').toLowerCase();
-            const className = (img.className || '').toLowerCase();
-            const parentClass = (img.parentElement?.className || '').toLowerCase();
-
-            if (
-              alt.includes('user') ||
-              alt.includes('avatar') ||
-              alt.includes('chatgpt') ||
-              alt.includes('profile') ||
-              className.includes('avatar') ||
-              parentClass.includes('avatar') ||
-              src.includes('avatar') ||
-              src.includes('gravatar')
-            ) {
-              continue;
-            }
-
-            // Filter out UI icons (small dimensions)
-            if (img.naturalWidth > 0 && img.naturalWidth < 120) continue;
-            if (img.naturalHeight > 0 && img.naturalHeight < 120) continue;
-
-            // Check if this image was NOT in the pre-prompt snapshot
-            const isNew = !this.existingImagesSnapshot.has(src);
-
-            if (isNew) {
-              candidateImages.push(img);
-            }
-          }
-
-          if (candidateImages.length > 0) {
-            break;
+        const candidates = this.findGeneratedImageCandidates();
+        if (candidates.length > 0) {
+          const bestCandidate = candidates[0];
+          if (this.isImageReady(bestCandidate)) {
+            const finalSrc = bestCandidate.img?.currentSrc || bestCandidate.img?.src || bestCandidate.src;
+            this.existingImagesSnapshot.add(finalSrc);
+            console.log('[PromptFlow] Successfully detected new generated image:', finalSrc);
+            return finalSrc;
           }
         }
-
-        // If found candidates, verify image is fully loaded
-        if (candidateImages.length > 0) {
-          const targetImg = candidateImages[candidateImages.length - 1]; // latest image
-
-          if (targetImg.complete && targetImg.naturalWidth > 100) {
-            const finalUrl = targetImg.currentSrc || targetImg.src;
-            this.existingImagesSnapshot.add(finalUrl); // Mark seen for subsequent prompts
-            console.log('[PromptFlow] Successfully detected new generated image:', finalUrl);
-            return finalUrl;
-          }
-
-          // If still loading, wait for it
-          try {
-            await new Promise((res, rej) => {
-              targetImg.addEventListener('load', () => res(), { once: true });
-              targetImg.addEventListener('error', () => rej(new Error('Image failed to load in DOM')), { once: true });
-              setTimeout(res, 3000);
-            });
-            const finalUrl = targetImg.currentSrc || targetImg.src;
-            this.existingImagesSnapshot.add(finalUrl);
-            return finalUrl;
-          } catch (e) {
-            console.warn('[PromptFlow] Waiting for image load event warning:', e);
-          }
-        }
-
-        await sleep(1000);
+        await sleep(500);
       }
 
       throw new Error('Newly generated image could not be detected within timeout');
@@ -900,27 +1010,25 @@
       const targetAssistantIndex = this.baselineAssistantCount || 0;
       console.log(`[PromptFlow] Monitoring for generated image in assistant turn >= index ${targetAssistantIndex}...`);
 
-      // 1. Give ChatGPT up to 15s to initiate generation (stop button appearing or assistant turn creation)
-      let generationInitiated = false;
+      // 1. Give ChatGPT up to 15s to initiate generation
       const startCheckUntil = Date.now() + 15000;
       while (Date.now() < startCheckUntil) {
         if (this.isGenerating()) {
-          generationInitiated = true;
           console.log('[PromptFlow] Generation start confirmed (stop button or streaming visible)');
           break;
         }
         const msgs = this.getAssistantMessages();
         if (msgs.length > targetAssistantIndex) {
-          generationInitiated = true;
           console.log('[PromptFlow] Generation start confirmed (new assistant turn created)');
           break;
         }
         await sleep(350);
       }
 
-      // 2. Poll until generation STOPS and a new image is found inside the assistant response
+      // 2. Poll until generation STOPS and a new image is verified
+      let candidateCheckCount = 0;
       while (Date.now() - startTime < timeoutMs) {
-        // Immediate ChatGPT error detection
+        // Immediate ChatGPT error banner detection
         const errorEl = document.querySelector('.text-red-500, [data-testid="error-message"], .border-red-500, [class*="error-message"]');
         if (errorEl && errorEl.textContent.trim().length > 0) {
           const errMsg = errorEl.textContent.trim();
@@ -930,110 +1038,36 @@
         }
 
         const isGen = this.isGenerating();
-        const assistantMsgs = this.getAssistantMessages();
+        const candidates = this.findGeneratedImageCandidates();
 
-        // Target ONLY the assistant message(s) created for THIS prompt!
-        // Never fall back to older assistant messages!
-        if (assistantMsgs.length <= targetAssistantIndex) {
-          await sleep(800);
-          continue;
-        }
+        if (candidates.length > 0) {
+          candidateCheckCount++;
+          const bestCandidate = candidates[0];
 
-        const targetScopes = assistantMsgs.slice(targetAssistantIndex);
-        const candidateImages = [];
-
-        for (const scope of targetScopes) {
-          if (!scope) continue;
-          // NEVER inspect user message containers
-          if (scope.getAttribute('data-message-author-role') === 'user' || scope.querySelector?.('[data-message-author-role="user"]')) {
-            continue;
-          }
-
-          if (!isGen) {
-            const scopeText = (scope.textContent || '').toLowerCase();
-            if (
-              (scopeText.includes('cannot generate') || scopeText.includes('unable to generate') || scopeText.includes('unable to create') || scopeText.includes('inappropriate') || scopeText.includes('content policy') || scopeText.includes('safety policy')) &&
-              !scope.querySelector('img:not([alt*="avatar"])')
-            ) {
-              throw new Error(`ChatGPT refusal: ${scope.textContent.trim().slice(0, 140)}`);
+          if (this.isImageReady(bestCandidate) || (!isGen && candidateCheckCount >= 3)) {
+            const finalSrc = bestCandidate.img?.currentSrc || bestCandidate.img?.src || bestCandidate.src;
+            if (finalSrc && (finalSrc.startsWith('http') || finalSrc.startsWith('blob:') || finalSrc.startsWith('data:'))) {
+              this.existingImagesSnapshot.add(finalSrc);
+              console.log('[PromptFlow] Confirmed generated image ready:', finalSrc);
+              return finalSrc;
             }
           }
-
-          const images = Array.from(scope.querySelectorAll('img'));
-
-          for (const img of images) {
-            const src = img.currentSrc || img.src;
-            if (!src) continue;
-
-            // Exclude user attachments or composer images
-            if (img.closest('[data-message-author-role="user"]') || img.closest('form') || img.closest('[class*="attachment"]')) {
-              continue;
-            }
-
-            // Exclude avatars
-            const alt = (img.getAttribute('alt') || '').toLowerCase();
-            const className = (img.className || '').toLowerCase();
-            const parentClass = (img.parentElement?.className || '').toLowerCase();
-
-            if (
-              alt.includes('user') ||
-              alt.includes('avatar') ||
-              alt.includes('chatgpt') ||
-              alt.includes('profile') ||
-              className.includes('avatar') ||
-              parentClass.includes('avatar') ||
-              src.includes('avatar') ||
-              src.includes('gravatar')
-            ) {
-              continue;
-            }
-
-            // Exclude tiny icons
-            if (img.naturalWidth > 0 && img.naturalWidth < 120) continue;
-            if (img.naturalHeight > 0 && img.naturalHeight < 120) continue;
-
-            // Check if new
-            if (!this.existingImagesSnapshot.has(src)) {
-              candidateImages.push({ img, src });
-            }
-          }
-        }
-
-        if (candidateImages.length > 0) {
-          // Inspect candidate images starting from the latest
-          for (let c = candidateImages.length - 1; c >= 0; c--) {
-            const candidate = candidateImages[c];
-            const candImg = candidate.img;
-
-            // When generation is finished, verify the image readiness across multiple checks
-            if (!isGen) {
-              let isReady = false;
-              // Check image readiness multiple times (up to 12 checks with 400ms polling)
-              for (let checkAttempt = 1; checkAttempt <= 12; checkAttempt++) {
-                if (candImg.complete && candImg.naturalWidth > 100 && candImg.naturalHeight > 100) {
-                  isReady = true;
-                  break;
-                }
-                await sleep(400);
-              }
-
-              if (isReady) {
-                // Secondary confirmation check to ensure image decoding has stabilized
-                await sleep(500);
-                if (candImg.naturalWidth > 100) {
-                  const finalSrc = candImg.currentSrc || candImg.src || candidate.src;
-                  if (finalSrc && (finalSrc.startsWith('http') || finalSrc.startsWith('blob:') || finalSrc.startsWith('data:'))) {
-                    this.existingImagesSnapshot.add(finalSrc);
-                    console.log(`[PromptFlow] Confirmed generated image ready after multiple checks:`, finalSrc);
-                    return finalSrc;
-                  }
-                }
+        } else if (!isGen && (Date.now() - startTime > 10000)) {
+          // Check for refusal ONLY if generation has stopped, at least 10s have elapsed, and zero images were found
+          const assistantMsgs = this.getAssistantMessages();
+          if (assistantMsgs.length > targetAssistantIndex) {
+            const latestTurn = assistantMsgs.slice(targetAssistantIndex);
+            for (const scope of latestTurn) {
+              const scopeText = (scope.textContent || '').toLowerCase();
+              const isRefusal = /cannot\s+(?:generate|create)|unable\s+to\s+(?:generate|create)|violat(?:es?|ing)\s+(?:our\s+)?(?:content|safety)\s+policy|against\s+(?:our\s+)?(?:content|safety)\s+policy/i.test(scopeText);
+              if (isRefusal && !scope.querySelector('img')) {
+                throw new Error(`ChatGPT refusal: ${scope.textContent.trim().slice(0, 140)}`);
               }
             }
           }
         }
 
-        await sleep(750);
+        await sleep(600);
       }
 
       throw new Error(`Image generation timed out after ${timeoutMinutes} minutes`);
