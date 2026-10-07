@@ -1069,6 +1069,91 @@
 
       throw new Error(`Image generation timed out after ${timeoutMinutes} minutes`);
     }
+
+    /**
+     * Waits for ChatGPT text generation to complete and returns the generated text response.
+     * Used for text-only prompts (e.g. Prompt 7: Marketplace Listing Copy & SKU).
+     */
+    async waitForTextResponse(timeoutMinutes = 2) {
+      const timeoutMs = timeoutMinutes * 60 * 1000;
+      const startTime = Date.now();
+      const targetAssistantIndex = this.baselineAssistantCount || 0;
+      console.log(`[PromptFlow] Waiting for text response on assistant turn >= ${targetAssistantIndex}...`);
+
+      // 1. Give ChatGPT up to 15s to initiate generation
+      const startCheckUntil = Date.now() + 15000;
+      while (Date.now() < startCheckUntil) {
+        if (this.isGenerating()) {
+          console.log('[PromptFlow] Text generation start confirmed (isGenerating = true)');
+          break;
+        }
+        const msgs = this.getAssistantMessages();
+        if (msgs.length > targetAssistantIndex) {
+          console.log('[PromptFlow] Text generation start confirmed (new assistant turn created)');
+          break;
+        }
+        await sleep(350);
+      }
+
+      // 2. Poll until generation STOPS and text response is complete
+      let stableCount = 0;
+      let lastTextLength = 0;
+
+      while (Date.now() - startTime < timeoutMs) {
+        // Immediate ChatGPT error banner detection
+        const errorEl = document.querySelector('.text-red-500, [data-testid="error-message"], .border-red-500, [class*="error-message"]');
+        if (errorEl && errorEl.textContent.trim().length > 0) {
+          const errMsg = errorEl.textContent.trim();
+          if (errMsg.toLowerCase().includes('error') || errMsg.toLowerCase().includes('violate') || errMsg.toLowerCase().includes('policy')) {
+            throw new Error(`ChatGPT error: ${errMsg}`);
+          }
+        }
+
+        const isGen = this.isGenerating();
+        const assistantMsgs = this.getAssistantMessages();
+
+        // Extract latest text from assistant messages >= targetAssistantIndex
+        let latestText = '';
+        if (assistantMsgs.length > targetAssistantIndex) {
+          const latestTurnMsgs = assistantMsgs.slice(targetAssistantIndex);
+          const targetMsg = latestTurnMsgs.slice(-1)[0];
+          const markdownEl = targetMsg?.querySelector('.markdown') || targetMsg;
+          latestText = (markdownEl?.textContent || '').trim();
+        }
+
+        if (!isGen && latestText.length > 20) {
+          if (latestText.length === lastTextLength) {
+            stableCount++;
+            if (stableCount >= 2) {
+              console.log(`[PromptFlow] Text generation finished (${latestText.length} chars).`);
+              return latestText;
+            }
+          } else {
+            stableCount = 0;
+            lastTextLength = latestText.length;
+          }
+        } else {
+          stableCount = 0;
+          lastTextLength = latestText.length;
+        }
+
+        await sleep(500);
+      }
+
+      // If timed out but we have non-trivial text, return what was captured
+      const msgs = this.getAssistantMessages();
+      if (msgs.length > targetAssistantIndex) {
+        const latestTurnMsgs = msgs.slice(targetAssistantIndex);
+        const targetMsg = latestTurnMsgs.slice(-1)[0];
+        const text = (targetMsg?.querySelector('.markdown')?.textContent || targetMsg?.textContent || '').trim();
+        if (text.length > 20) {
+          console.log(`[PromptFlow] Returning text captured before timeout (${text.length} chars).`);
+          return text;
+        }
+      }
+
+      throw new Error(`Text generation timed out after ${timeoutMinutes} minutes`);
+    }
   }
 
   const adapter = new ChatGPTAdapter();
@@ -1304,6 +1389,14 @@
             const imageUrl = await adapter.waitForGeneratedImage(message.timeoutMinutes || 3);
             overlay.createOrUpdate('PromptFlow', `Image ${message.promptIndex} ready!`, 'completed');
             sendResponse({ success: true, imageUrl });
+            break;
+          }
+
+          case 'WAIT_AND_DETECT_TEXT': {
+            overlay.createOrUpdate('PromptFlow', `Generating listing text ${message.promptIndex}...`, 'generating');
+            const generatedText = await adapter.waitForTextResponse(message.timeoutMinutes || 2);
+            overlay.createOrUpdate('PromptFlow', `Listing text ${message.promptIndex} ready!`, 'completed');
+            sendResponse({ success: true, text: generatedText });
             break;
           }
 

@@ -596,7 +596,25 @@ All 17 reported bugs and operational edge cases have been resolved and verified 
   3. *Main World / Fallback Race:* A short 2500ms bridge timeout caused the isolated world to initiate a fallback submit shortly after the main world fired.
 - **Implemented Fixes:**
   - **Mandatory Text Verification in [`content/chatgpt-main.js`](file:///d:/ALL_USER_DATA/GPTImage/content/chatgpt-main.js):** The submission loop now strictly verifies `currentText.includes(requiredSnippet)` in the composer before breaking out or clicking Send. It is physically impossible to submit an attachment without the prompt text.
-  - **Fallback Safeguard in [`content/chatgpt.js`](file:///d:/ALL_USER_DATA/GPTImage/content/chatgpt.js):** `submitPrompt()` throws an explicit error if `composer.innerText` is empty, refusing to dispatch Send or Enter when there is no text.
-  - **Bridge Timeout Expansion:** Increased `bridgePromise` timeout to 4500ms, giving slower network connections and React reconciliation ample time to settle without race conditions.
-  - **Attachment Stabilization Delays:** In `waitForAttachment()`, added a 1500ms stabilization delay after upload completion, and in [`background/service-worker.js`](file:///d:/ALL_USER_DATA/GPTImage/background/service-worker.js), added a 2500ms buffer after reference image upload before initiating Prompt 1.
+### 9. Prompt 7: Marketplace Listing Copy & SKU Generation (Text-Only, No File Downloads)
+- **Feature Objective:**
+  Automatically generate a 7th prompt that produces an attractive, commercial marketplace listing copy tailored for Meesho, Flipkart, Amazon, and Etsy. The listing text contains:
+  1. `SKU ID`: Clean identifier derived from the design name or queue index (`SKU_${designName}`).
+  2. `Product Description`: Engaging, conversion-optimized copy of approximately 100 words based directly on the garment artwork, fabric quality, styling recommendations, and wash care.
+- **Critical Execution Constraint:**
+  The generated text must NOT be written to any text file or downloaded individually, nor bundled into the final ZIP archive (which remains exclusive to the 6 high-resolution PNG images). It must never trigger image detection timeouts or pipeline failures.
+- **Implemented Architecture:**
+  - **Storage & Prompts ([`utils/storage.js`](file:///d:/ALL_USER_DATA/GPTImage/utils/storage.js)):**
+    - Added Prompt 7 to `buildPromptsForConfig()` and `createDefaultPrompts(count = 7)` with `expectsImage: false` (prompts 1–6 retain `expectsImage: true`).
+    - Added `'Listing Copy (SKU & Description)'` to `DEFAULT_PROMPT_TITLES`.
+    - Automatically derives `SKU ID` from `customName`, `baseName`, or queue index.
+  - **Text-Detection Engine ([`content/chatgpt.js`](file:///d:/ALL_USER_DATA/GPTImage/content/chatgpt.js)):**
+    - Implemented `waitForTextResponse(timeoutMinutes = 2)` in `ChatGPTAdapter`.
+    - Monitors ChatGPT text generation completion without polling for images, extracting the full markdown response from the latest assistant turn once `isGenerating()` stabilizes.
+    - Added `WAIT_AND_DETECT_TEXT` message handler.
+  - **Automation Dispatch Pipeline ([`background/service-worker.js`](file:///d:/ALL_USER_DATA/GPTImage/background/service-worker.js)):**
+    - In the prompt execution loop, added conditional branching: when `prompt.expectsImage === false`, dispatches `WAIT_AND_DETECT_TEXT` instead of `WAIT_AND_DETECT_IMAGE`.
+    - Stores the generated response in `prompt.generatedText` while keeping `prompt.imageUrl = null`.
+    - The final ZIP packaging filters strictly by `p.status === PROMPT_STATUS.COMPLETED && p.imageUrl`, ensuring Prompt 7 is completely omitted from ZIP files and downloads without any side effects.
+
 

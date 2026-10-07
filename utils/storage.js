@@ -902,13 +902,46 @@ Clean white background, realistic product photography, soft studio lighting, sub
 
 No unnecessary models, no lifestyle scene, no clutter, no watermark. Final result should look like a ready-to-use premium marketplace product listing image for Meesho, Amazon, Flipkart or similar e-commerce platforms.`;
 
+  // Prompt 7: Marketplace Listing Copy & SKU (Text-only prompt for Meesho / Selling Apps)
+  const designBaseName = (config.baseName || config.customName || `design_${(config.queueIndex !== undefined ? config.queueIndex + 1 : 1)}`);
+  const skuIdentifier = `SKU_${designBaseName.toUpperCase().replace(/[^A-Z0-9_-]/g, '_').slice(0, 30)}`;
+
+  const prompt7 = `Reference Image Guide:
+Look closely at the uploaded reference image, the garment design, and the graphic print/artwork featured throughout this session.
+
+Generate an attractive, high-converting commercial e-commerce product listing copy tailored for selling platforms like Meesho, Flipkart, Amazon, and Etsy.
+
+Produce the output strictly in the following clean format:
+
+SKU ID: ${skuIdentifier}
+
+PRODUCT TITLE:
+[Create a catchy, attractive, search-optimized title in 10-15 words including apparel type (${fit.label}), main colors, and key graphic/aesthetic vibe]
+
+PRODUCT DESCRIPTION (approx. 100 words):
+[Write a captivating, stylish, and persuasive product description of around 100 words based directly on the design in the reference image. Highlight:
+1. The unique artwork/graphic design aesthetic, colors, and premium visual impact
+2. Fabric comfort, softness, breathable feel, and all-day wearable luxury
+3. Versatile styling options (pairing effortlessly with jeans, cargo pants, shorts, or layered jackets)
+4. Durable print quality and easy maintenance
+Ensure the tone is warm, attractive, trendy, and compelling to boost sales conversions on marketplace apps.]
+
+KEY SPECIFICATIONS:
+• Apparel Type: ${fit.label}
+• Sleeve Style: ${sleeve.label}
+• Fabric: Premium breathable high-comfort cotton blend
+• Print Technology: High-definition fade-resistant graphic print
+• Occasion: Casual streetwear, daily wear, outings, and college
+• Wash Care: Gentle machine wash or hand wash in cold water`;
+
   return [
-    { id: 1, title: `Front View (${frontPose.shortName})`, text: prompt1 },
-    { id: 2, title: `Back View (${backPose.shortName})`, text: prompt2 },
-    { id: 3, title: `Side View (${sidePose.shortName})`, text: prompt3 },
-    { id: 4, title: detailTitle, text: prompt4 },
-    { id: 5, title: 'Graphic Print Close-Up', text: prompt5 },
-    { id: 6, title: 'Listing Infographic', text: prompt6 }
+    { id: 1, title: `Front View (${frontPose.shortName})`, text: prompt1, expectsImage: true },
+    { id: 2, title: `Back View (${backPose.shortName})`, text: prompt2, expectsImage: true },
+    { id: 3, title: `Side View (${sidePose.shortName})`, text: prompt3, expectsImage: true },
+    { id: 4, title: detailTitle, text: prompt4, expectsImage: true },
+    { id: 5, title: 'Graphic Print Close-Up', text: prompt5, expectsImage: true },
+    { id: 6, title: 'Listing Infographic', text: prompt6, expectsImage: true },
+    { id: 7, title: 'Listing Copy (SKU & Description)', text: prompt7, expectsImage: false }
   ];
 }
 
@@ -918,24 +951,27 @@ export const DEFAULT_PROMPT_TITLES = [
   'Side View (90° Profile Right)',
   'Neckline & Collar Close-Up',
   'Graphic Print Close-Up',
-  'Listing Infographic'
+  'Listing Infographic',
+  'Listing Copy (SKU & Description)'
 ];
 
 export const DEFAULT_PROMPT_TEXTS = buildPromptsForConfig().map((p) => p.text);
 
-export function createDefaultPrompts(count = 6, config = {}) {
+export function createDefaultPrompts(count = 7, config = {}) {
   const generated = buildPromptsForConfig(config);
   const prompts = [];
   for (let i = 1; i <= count; i++) {
-    const item = generated[i - 1] || { title: `Prompt ${i}`, text: '' };
+    const item = generated[i - 1] || { title: `Prompt ${i}`, text: '', expectsImage: i <= 6 };
     prompts.push({
       id: i,
       title: item.title,
       text: item.text,
       enabled: true,
+      expectsImage: item.expectsImage !== undefined ? item.expectsImage : (i <= 6),
       status: PROMPT_STATUS.WAITING,
       filename: null,
       imageUrl: null,
+      generatedText: null,
       retries: 0,
       maxRetries: 3,
       error: null,
@@ -1008,9 +1044,11 @@ export function createQueueItem(fileData, queueIndex = 0, settings = {}) {
     title: cfg.title,
     text: cfg.text,
     enabled: true,
+    expectsImage: cfg.expectsImage !== undefined ? cfg.expectsImage : (idx < 6),
     status: PROMPT_STATUS.WAITING,
     filename: null,
     imageUrl: null,
+    generatedText: null,
     retries: 0,
     maxRetries: 3,
     error: null,
@@ -1038,7 +1076,7 @@ export function createQueueItem(fileData, queueIndex = 0, settings = {}) {
 }
 
 export function createInitialSession() {
-  const defaultPrompts = createDefaultPrompts(6);
+  const defaultPrompts = createDefaultPrompts(7);
   return {
     sessionId: `session_${Date.now()}`,
     state: AUTOMATION_STATE.IDLE,
@@ -1109,19 +1147,27 @@ class StorageManager {
       await this.saveSession(session);
       return session;
     }
-    // Ensure all 6 prompts structure exists
+    // Ensure all 7 prompts structure exists
     if (!Array.isArray(session.prompts) || session.prompts.length === 0) {
-      session.prompts = createDefaultPrompts(6);
+      session.prompts = createDefaultPrompts(7);
       session.defaultsInitialized = true;
       await this.saveSession(session);
       return session;
     }
+    // If existing session has fewer than 7 prompts, append missing prompts
+    if (session.prompts.length < 7) {
+      const defaults = createDefaultPrompts(7);
+      while (session.prompts.length < 7) {
+        session.prompts.push(defaults[session.prompts.length]);
+      }
+      await this.saveSession(session);
+    }
     // If upgrading from older version without default prompts populated,
-    // and all prompts are empty, automatically initialize with 6 default prompts
+    // and all prompts are empty, automatically initialize with 7 default prompts
     if (!session.defaultsInitialized) {
       const allEmpty = session.prompts.every((p) => !p.text || !p.text.trim());
       if (allEmpty) {
-        session.prompts = createDefaultPrompts(session.prompts.length || 6);
+        session.prompts = createDefaultPrompts(session.prompts.length || 7);
       }
       session.defaultsInitialized = true;
       await this.saveSession(session);
@@ -1157,10 +1203,11 @@ class StorageManager {
 
   async resetSessionPreservingInputs() {
     const current = await this.getSession();
-    const updatedPrompts = (current.prompts || createDefaultPrompts(6)).map(p => ({
+    const updatedPrompts = (current.prompts || createDefaultPrompts(7)).map(p => ({
       ...p,
       status: PROMPT_STATUS.WAITING,
       imageUrl: null,
+      generatedText: null,
       filename: null,
       retries: 0,
       error: null,
@@ -1179,6 +1226,7 @@ class StorageManager {
         ...p,
         status: PROMPT_STATUS.WAITING,
         imageUrl: null,
+        generatedText: null,
         filename: null,
         retries: 0,
         error: null,

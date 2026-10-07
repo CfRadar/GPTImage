@@ -420,8 +420,8 @@ console.log('\n[Test Suite 7] 6 Default Fashion Prompts & Custom Modification Li
 (async () => {
   const { DEFAULT_PROMPT_TEXTS, DEFAULT_PROMPT_TITLES, createDefaultPrompts, createInitialSession } = await import('../utils/storage.js');
 
-  assert(Array.isArray(DEFAULT_PROMPT_TEXTS) && DEFAULT_PROMPT_TEXTS.length === 6, 'DEFAULT_PROMPT_TEXTS contains exactly 6 prompts');
-  assert(Array.isArray(DEFAULT_PROMPT_TITLES) && DEFAULT_PROMPT_TITLES.length === 6, 'DEFAULT_PROMPT_TITLES contains 6 matching titles');
+  assert(Array.isArray(DEFAULT_PROMPT_TEXTS) && DEFAULT_PROMPT_TEXTS.length === 7, 'DEFAULT_PROMPT_TEXTS contains exactly 7 prompts');
+  assert(Array.isArray(DEFAULT_PROMPT_TITLES) && DEFAULT_PROMPT_TITLES.length === 7, 'DEFAULT_PROMPT_TITLES contains 7 matching titles');
 
   // Verify Prompt 1: Front View (Model in printed T-shirt)
   assert(DEFAULT_PROMPT_TEXTS[0].includes('FRONT VIEW ONLY') && DEFAULT_PROMPT_TEXTS[0].includes('oversized'), 'Prompt 1 contains FRONT VIEW ONLY & oversized T-shirt instructions');
@@ -447,11 +447,19 @@ console.log('\n[Test Suite 7] 6 Default Fashion Prompts & Custom Modification Li
   // Verify Prompt 6: Marketplace Product Listing Infographic
   assert(DEFAULT_PROMPT_TEXTS[5].includes('PRODUCT LISTING INFOGRAPHIC') && (DEFAULT_PROMPT_TEXTS[5].includes('Same as Reference') || DEFAULT_PROMPT_TEXTS[5].includes('Oversized Fit')), 'Prompt 6 contains PRODUCT LISTING INFOGRAPHIC instructions');
 
-  // Verify initial session creation has all 6 prompts populated by default
+  // Verify Prompt 7: Marketplace Listing Copy & SKU (Text-only prompt for Meesho / Selling Apps)
+  assert(DEFAULT_PROMPT_TITLES[6] === 'Listing Copy (SKU & Description)', 'Prompt 7 title is Listing Copy (SKU & Description)');
+  assert(DEFAULT_PROMPT_TEXTS[6].includes('SKU ID:'), 'Prompt 7 specifies SKU ID derivation');
+  assert(DEFAULT_PROMPT_TEXTS[6].includes('100 words'), 'Prompt 7 instructs generating description in approximately 100 words');
+  assert(DEFAULT_PROMPT_TEXTS[6].includes('Meesho'), 'Prompt 7 explicitly targets Meesho and selling platforms');
+
+  // Verify initial session creation has all 7 prompts populated by default
   const defaultSession = createInitialSession();
-  assert(defaultSession.prompts.length === 6, 'Initial session contains 6 prompt items');
+  assert(defaultSession.prompts.length === 7, 'Initial session contains 7 prompt items');
   assert(defaultSession.defaultsInitialized === true, 'Initial session marks defaultsInitialized as true');
-  assert(defaultSession.prompts.every(p => p.text && p.text.length > 50), 'All 6 prompts in default session are pre-filled with full text');
+  assert(defaultSession.prompts.every(p => p.text && p.text.length > 50), 'All 7 prompts in default session are pre-filled with full text');
+  assert(defaultSession.prompts.slice(0, 6).every(p => p.expectsImage === true), 'Prompts 1-6 expect generated images');
+  assert(defaultSession.prompts[6].expectsImage === false, 'Prompt 7 is text-only (expectsImage === false)');
 
   // Verify manual change override: manual edit takes precedence over default
   const testSession = createInitialSession();
@@ -542,31 +550,36 @@ console.log('\n[Test Suite 7] 6 Default Fashion Prompts & Custom Modification Li
   const pWithOffset = calculatePoseIndices(0, 4);
   assert(pWithOffset[0] === 4 && pWithOffset[1] === 4 && pWithOffset[2] === 4, `Offset 4 shifts starting preset to 4: got [${pWithOffset}]`);
 
-  // 8.6 Prompt Compilation: Angle 1 = Front, Angle 2 = Back, Angle 3 = Side
+  // 8.6 Prompt Compilation: Angle 1 = Front, Angle 2 = Back, Angle 3 = Side, Prompt 7 = Marketplace Listing Copy & SKU
   const maleSamePrompts = buildPromptsForConfig({
     modelGender: 'male',
     tshirtType: 'same',
     zoomType: 'full_body',
     poseIndices: [0, 0, 0]
   });
-  assert(maleSamePrompts.length === 6, 'buildPromptsForConfig returned 6 prompts');
+  assert(maleSamePrompts.length === 7, 'buildPromptsForConfig returned 7 prompts');
   assert(maleSamePrompts[0].text.includes('FRONT VIEW'), 'Prompt 1 is FRONT VIEW');
   assert(maleSamePrompts[0].text.includes('printed graphic/design clearly visible'), 'Prompt 1 shows model with front print');
   assert(maleSamePrompts[1].text.includes('BACK VIEW'), 'Prompt 2 is BACK VIEW');
   assert(maleSamePrompts[1].text.includes('NO printed graphic'), 'Prompt 2 enforces clean back without print');
   assert(maleSamePrompts[2].text.includes('SIDE VIEW') || maleSamePrompts[2].text.includes('SIDE PROFILE'), 'Prompt 3 is SIDE VIEW');
+  assert(maleSamePrompts[6].expectsImage === false, 'Prompt 7 has expectsImage === false');
+  assert(maleSamePrompts[6].text.includes('SKU ID: SKU_DESIGN_1'), 'Prompt 7 includes derived SKU ID');
+  assert(maleSamePrompts[6].text.includes('Meesho'), 'Prompt 7 includes Meesho marketplace copy directive');
 
   // Test Female + Oversized + Medium (Preset 2: Pockets Front, Over-Shoulder Right, 90° Left)
   const femaleOversizedPrompts = buildPromptsForConfig({
     modelGender: 'female',
     tshirtType: 'oversized',
     zoomType: 'medium',
-    poseIndices: [1, 1, 1]
+    poseIndices: [1, 1, 1],
+    baseName: 'summer_drop'
   });
   assert(femaleOversizedPrompts[0].text.includes('adult female'), 'Prompt 1 specifies adult female model');
   assert(femaleOversizedPrompts[0].text.includes(FRONT_POSES[1].direction), `Prompt 1 uses Front Pose 2 direction (${FRONT_POSES[1].shortName})`);
   assert(femaleOversizedPrompts[1].text.includes(BACK_POSES[1].direction), `Prompt 2 uses Back Pose 2 direction (${BACK_POSES[1].shortName})`);
   assert(femaleOversizedPrompts[2].text.includes(SIDE_POSES[1].direction), `Prompt 3 uses Side Pose 2 direction (${SIDE_POSES[1].shortName})`);
+  assert(femaleOversizedPrompts[6].text.includes('SKU ID: SKU_SUMMER_DROP'), 'Prompt 7 incorporates custom baseName into SKU ID');
 
   // 8.7 Queue Item Creation with Distinct Angle Combinations
   const mockFile1 = { name: 'design-alpha.png', type: 'image/png', size: 12345, dataUrl: 'data:image/png;base64,mock1' };
@@ -578,7 +591,8 @@ console.log('\n[Test Suite 7] 6 Default Fashion Prompts & Custom Modification Li
   assert(queueItem1.id && queueItem1.file.name === 'design-alpha.png', 'Queue item 1 initialized with correct filename');
   assert(queueItem1.poseIndices[0] === 0 && queueItem1.poseIndices[1] === 0 && queueItem1.poseIndices[2] === 0, 'Queue item 1 assigned Preset 0 (Front 0, Back 0, Side 0)');
   assert(queueItem2.poseIndices[0] === 1 && queueItem2.poseIndices[1] === 1 && queueItem2.poseIndices[2] === 1, 'Queue item 2 assigned Preset 1 (Front 1, Back 1, Side 1)');
-  assert(queueItem1.prompts.length === 6 && queueItem2.prompts.length === 6, 'Both queue items contain 6 compiled prompts');
+  assert(queueItem1.prompts.length === 7 && queueItem2.prompts.length === 7, 'Both queue items contain 7 compiled prompts');
+  assert(queueItem1.prompts[6].expectsImage === false && queueItem2.prompts[6].expectsImage === false, 'Both queue items have expectsImage === false for Prompt 7');
   assert(queueItem1.prompts[0].text !== queueItem2.prompts[0].text, 'Queue item 1 and 2 have distinct model poses in prompt 1');
   assert(queueItem1.prompts[1].text !== queueItem2.prompts[1].text, 'Queue item 1 and 2 have distinct model poses in prompt 2');
   assert(queueItem1.prompts[2].text !== queueItem2.prompts[2].text, 'Queue item 1 and 2 have distinct model poses in prompt 3');
@@ -768,6 +782,29 @@ console.log('\n[Test Suite 7] 6 Default Fashion Prompts & Custom Modification Li
   const manifestJson = JSON.parse(fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8'));
   const hasMainWorld = manifestJson.content_scripts.some(cs => cs.world === 'MAIN' && cs.js.includes('content/chatgpt-main.js'));
   assert(hasMainWorld, 'manifest.json configures content/chatgpt-main.js in MAIN world');
+
+  // 10. Test Suite 10: Prompt 7 Marketplace Listing Copy & SKU Generation (Text-Only, No File Downloads)
+  console.log('\n[Test Suite 10] Prompt 7: Text-Only Marketplace Listing Copy & SKU Generation');
+
+  assert(chatgptContentScript.includes('waitForTextResponse'), 'content/chatgpt.js implements waitForTextResponse for text prompt completion');
+  assert(chatgptContentScript.includes("case 'WAIT_AND_DETECT_TEXT'"), 'content/chatgpt.js handles WAIT_AND_DETECT_TEXT message');
+  assert(serviceWorkerCode.includes('prompt.expectsImage === false'), 'background/service-worker.js branches on prompt.expectsImage === false');
+  assert(serviceWorkerCode.includes("type: 'WAIT_AND_DETECT_TEXT'"), 'background/service-worker.js dispatches WAIT_AND_DETECT_TEXT for text prompts');
+  assert(serviceWorkerCode.includes('generatedText'), 'background/service-worker.js stores generated text in prompt.generatedText');
+  assert(serviceWorkerCode.includes('p.status === PROMPT_STATUS.COMPLETED && p.imageUrl'), 'service-worker.js filters only completed prompts with imageUrl for downloads, excluding text prompts');
+
+  // Verify Prompt 7 SKU derivation with different naming styles
+  const defaultPrompt7 = buildPromptsForConfig({ queueIndex: 0 });
+  assert(defaultPrompt7[6].text.includes('SKU ID: SKU_DESIGN_1'), 'Prompt 7 derives SKU_DESIGN_1 for queue index 0 without custom name');
+
+  const customPrompt7 = buildPromptsForConfig({ queueIndex: 2, customName: 'Retro Wave Hoodie' });
+  assert(customPrompt7[6].text.includes('SKU ID: SKU_RETRO_WAVE_HOODIE'), 'Prompt 7 derives clean SKU ID from custom name');
+
+  const basePrompt7 = buildPromptsForConfig({ queueIndex: 1, baseName: 'vintage_tee_drop' });
+  assert(basePrompt7[6].text.includes('SKU ID: SKU_VINTAGE_TEE_DROP'), 'Prompt 7 derives SKU ID from baseName');
+
+  assert(defaultPrompt7[6].text.includes('100 words'), 'Prompt 7 specifies approximately 100 words description');
+  assert(defaultPrompt7[6].text.includes('Meesho') && defaultPrompt7[6].text.includes('Flipkart') && defaultPrompt7[6].text.includes('Amazon'), 'Prompt 7 targets Meesho, Flipkart, and Amazon marketplace listings');
 
   // Summary
   console.log('\n========================================');
